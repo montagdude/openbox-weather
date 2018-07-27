@@ -1,0 +1,600 @@
+#!/usr/bin/env python
+
+import requests
+import argparse
+import sys
+import os
+from datetime import datetime, timedelta
+from dateutil import tz
+
+provider = "https://api.weather.gov"
+version = ${OPENBOX_WEATHER_VERSION}
+
+def exit_error(msg=None):
+
+    if msg is not None:
+        sys.stderr.write(msg + "\n")
+    sys.exit(1)
+
+def read_config():
+
+    sys.path.insert(0, os.environ["HOME"] +
+                    "/.config/openbox-weather")
+    try:
+        import config
+    except ImportError:
+        sys.path.insert(0, "/etc/openbox-weather")
+        try:
+            import config
+        except ImportError:
+            exit_error("Unable to open config file.")
+
+    try:
+        lat = config.latitude
+    except AttributeError:
+        exit_error("latitude not found in config.py")
+    try:
+        lon = config.longitude
+    except AttributeError:
+        exit_error("longitude not found in config.py")
+    try:
+        station = config.station
+    except AttributeError:
+        station = None
+    try:
+        units = config.units
+    except AttributeError:
+        units = "imperial"
+    try:
+        icon_path = config.icon_path
+    except AttributeError:
+        icon_path = "/usr/share/openbox-weather/icons"
+    try:
+        openboxbg = config.openboxbg
+    except AttributeError:
+        openboxbg = "dark"
+    try:
+        tint2bg = config.tint2bg
+    except AttributeError:
+        tint2bg = "dark"
+
+    return lat, lon, station, units, icon_path, openboxbg, tint2bg
+
+def print_version():
+    print("openbox-weather version {}".format(version))
+
+################################################################################
+# Unit conversion, text parsing, etc.
+#
+def convert_temperature(temp, tunit, units):
+
+    # Handle empty temperature
+    if temp == None:
+        if units == 'metric':
+            return None, 'C'
+        else:
+            return None, 'F'
+
+    if tunit.find('C') != -1:
+        if units == 'metric':
+            return temp, 'C'
+        elif units == 'imperial':
+            return 9./5.*temp + 32., 'F'
+    elif tunit.find('F') != -1:
+        if units == 'metric':
+            return 5./9.*(temp - 32.), 'C'
+        elif units == 'imperial':
+            return temp, 'F'
+
+def convert_windspeed(windstring, units):
+    '''Parses and converts wind string. The string should be of the format
+       "speed unit" or "lowspeed to highspeed unit". Returns a new string with
+       units converted.'''
+
+    # Handle empty wind string
+    if windstring == None:
+        return None
+
+    # Parse wind string to get values
+    if windstring.find("to") != -1:
+        low = float(windstring.split(" to ")[0])
+        high_unit = windstring.split(" to ")[1]
+        high = float(high_unit.split()[0])
+        windspeed = [low, high]
+        windunit = high_unit.split()[1]
+        nspeeds = 2
+    else:
+        windspeed = [float(windstring.split()[0])]
+        windunit = windstring.split()[1]
+        nspeeds = 1
+
+    if (windunit == 'm/sec') or (windunit == 'm_s-1'):
+        if units == 'metric':
+            outunit = 'm/sec'
+        elif units == 'imperial':
+            for i in range(nspeeds):
+                windspeed[i] *= 3600./(0.0254*12*5280)
+            outunit = 'mph'
+    elif windunit == 'mph':
+        if units == 'metric':
+            for i in range(nspeeds):
+                windspeed[i] *= 0.0254*12*5280/3600.
+            outunit = 'm/sec'
+        elif units == 'imperial':
+            outunit = 'mph'
+
+    if nspeeds == 2:
+        return "{:.0f}-{:.0f} {}".format(windspeed[0], windspeed[1], outunit)
+    else:
+        return "{:.0f} {}".format(windspeed[0], outunit)
+
+def weather_to_icon(weather, bgcolor, icon_path):
+    '''Returns icon corresponding to weather string'''
+
+    if bgcolor == "dark":
+        bgpath = "/darkbg"
+    else:
+        bgpath = "/lightbg"
+
+    weather = weather.lower()
+    if (weather.find("sunny") != -1) or (weather.find("clear") != -1):
+        if weather.find("partly") != -1:
+            icon = icon_path + bgpath + "/weather-few-clouds.svg"
+        else:
+            icon = icon_path + bgpath + "/weather-clear.svg"
+    elif weather.find("cloud") != -1:
+        if weather.find("partly") != -1:
+            icon = icon_path + bgpath + "/weather-few-clouds.svg"
+        else:
+            icon = icon_path + bgpath + "/weather-clouds.svg"
+    elif weather.find("storm") != -1:
+        icon = icon_path + bgpath + "/weather-storm.svg"
+    elif (weather.find("rain") != -1) or (weather.find("shower") != -1):
+        if weather.find("slight") != -1:
+            icon = icon_path + bgpath + "/weather-clouds.svg"
+        elif weather.find("chance") != -1:
+            icon = icon_path + bgpath + "/weather-showers-scattered.svg"
+        else:
+            icon = icon_path + bgpath + "/weather-showers.svg"
+    elif weather.find("fog") != -1:
+        icon = icon_path + bgpath + "/weather-fog.svg"
+    elif weather.find("snow") != -1:
+        icon = icon_path + bgpath + "/weather-snow.svg"
+    else:
+        icon = icon_path + bgpath + "/weather-none-available.svg"
+
+    return icon
+
+def localtime_from_string(timestring):
+    '''Converts time string to localtime object.
+       timestring is in the format %Y-%m-%dayT%H:%M:%S+/-%H:%M,
+       where the last section is offset from UTC'''
+
+    day = timestring.split('T')[0]
+    hour = timestring.split('T')[1][0:8]
+    offset = timestring.split('T')[1][8:]
+    offset_hours = float(offset.split(':')[0])
+    offset_minutes = float(offset.split(':')[1])
+    utc = tz.tzutc()
+    local = tz.tzlocal()
+    tobj = datetime.strptime(day + " " + hour, "%Y-%m-%d %H:%M:%S")
+    utcoffset = timedelta(hours=offset_hours, minutes=offset_minutes)
+    tobj -= utcoffset
+    tobj = tobj.replace(tzinfo=utc)
+    tobj = tobj.astimezone(local)
+
+    return tobj
+
+def parse_detailed_forecast(detailed_forecast):
+    '''Gets low temp, high temp, and precip chance from detailed forecast'''
+
+    lowloc = detailed_forecast.find("low")
+    if lowloc != -1:
+        lowstr = detailed_forecast[lowloc:].split()
+        try:
+            low = float(lowstr[2].replace('.', ''))
+        except:
+            low = None
+    else:
+        low = None
+
+    highloc = detailed_forecast.find("high")
+    if highloc != -1:
+        highstr = detailed_forecast[highloc:].split()
+        try:
+            high = float(highstr[2].replace('.', ''))
+        except:
+            high = None
+    else:
+        high = None
+
+    preciploc = detailed_forecast.find("precipitation")
+    if preciploc != -1:
+        precipstr = detailed_forecast[preciploc:].split()
+        try:
+            precip_chance = precipstr[2].replace('.', '')
+        except:
+            precip_chance = "0%"
+    else:
+        precip_chance = "0%" 
+
+    return low, high, precip_chance
+
+################################################################################
+# Functions to retrieve weather data from NOAA
+#
+def get_nearest_station(lat, lon):
+    '''Returns stationid of nearest station to a point'''
+
+    response = requests.get("{}/points/{},{}/stations".format(provider,lat,lon))
+    stations = response.json()
+
+    return stations[u'features'][0][u'properties'][u'stationIdentifier']
+
+def get_location_name(lat, lon):
+    '''Gets city and state for location'''
+
+    response = requests.get("{}/points/{},{}".format(provider,lat,lon))
+    pointdata = response.json()
+    city = pointdata[u'properties'][u'relativeLocation'][u'properties'][u'city']
+    state = pointdata[u'properties'][u'relativeLocation'][u'properties'][u'state']
+
+    return {'city': city, 'state': state}
+
+def get_current_conditions(stationid, units='metric'):
+    '''Returns current weather, temperature, feels like temp, and wind'''
+
+    response = requests.get("{}/stations/{}/observations/current"\
+                            .format(provider, stationid))
+    conditions = response.json()
+    weather = conditions[u'properties'][u'textDescription']
+    temperature = conditions[u'properties'][u'temperature'][u'value']
+    tunit = conditions[u'properties'][u'temperature'][u'unitCode']\
+                       .split(':')[1]
+    heatindex = conditions[u'properties'][u'heatIndex'][u'value']
+    windchill = conditions[u'properties'][u'windChill'][u'value']
+    windspeed = conditions[u'properties'][u'windSpeed'][u'value']
+    windgust = conditions[u'properties'][u'windGust'][u'value']
+    wunit = conditions[u'properties'][u'windSpeed'][u'unitCode']\
+                       .split(':')[1]
+    humidity = conditions[u'properties'][u'relativeHumidity'][u'value']
+    tupdate = conditions[u'properties'][u'timestamp']
+
+    if temperature is not None:
+        temperature = float(temperature)
+    if heatindex is not None:
+        heatindex = float(heatindex)
+    if windchill is not None:
+        windchill = float(windchill)
+
+    # Unit conversions
+    temperature, tempunit = convert_temperature(temperature, tunit, units)
+    heatindex, _ = convert_temperature(heatindex, tunit, units)
+    windchill, _ = convert_temperature(windchill, tunit, units)
+    if windspeed is not None:
+        windstring = "Wind " \
+                   + convert_windspeed("{} {}".format(windspeed, wunit), units)
+    else:
+        windstring = "Wind calm"
+    if windgust is not None:
+        guststring = "Gusts " \
+                   + convert_windspeed("{} {}".format(windgust, wunit), units)
+    else:
+        guststring = None
+
+    # Temperature strings
+    if temperature is not None:
+        tempstring = u'{:.1f} {}'.format(temperature, tempunit)
+    else:
+        tempstring = u'? {}'.format(tempunit)
+    if heatindex is not None:
+        feelslike = u'Feels like {:.1f} {}'.format(heatindex, tempunit)
+    elif windchill is not None:
+        feelslike = u'Feels like {:.1f} {}'.format(windchill, tempunit)
+    else:
+        feelslike = 'Feels like ' + tempstring
+
+    # Humidity string
+    if humidity is not None:
+        humiditystring = "Humidity {:.0f}%".format(humidity)
+    else:
+        humiditystring = "? humidity"
+
+    # Time string
+    if tupdate is not None:
+        tupdateobj = localtime_from_string(tupdate)
+        tupdatestring = "Updated " + tupdateobj.strftime("%a %-I:%M %p")
+    else:
+        tupdatestring = "Unknown update time"
+
+    return {'weather': weather, 'temperature': tempstring,
+            'feelslike': feelslike, 'wind': windstring, 'gusts':guststring,
+            'humidity': humiditystring, 'updated': tupdatestring}
+
+def get_hourly_forecast(lat, lon, units='metric', nhours=24):
+    '''Returns hourly forecast for a point for next nhours hours'''
+
+    if nhours > 156:
+        sys.stderr.write("Cannot get longer than 156-hour forecast")
+        sys.exit(1)
+
+    response = requests.get("{}/points/{},{}/forecast/hourly"\
+                            .format(provider,lat,lon))
+    hourly = response.json()
+    periods = hourly[u'properties'][u'periods'][0:nhours]
+    forecast = []
+    for period in periods:
+        start = period[u'startTime']
+        weather = period[u'shortForecast']
+        temperature = period[u'temperature']
+        tunit = period[u'temperatureUnit']
+        wind = period[u'windSpeed']
+
+        # Chance of precipitation (comes from weather string, with %
+        # "translated" the same way it is by forecast.weather.gov)
+        if weather.find("Slight Chance") != -1:
+            precip_chance = "10-20%"
+        elif weather.find("Chance") != -1:
+            precip_chance = "30-50%"
+        elif weather.find("Likely") != -1:
+            precip_chance = "60-70%"
+        elif (weather.find("Occasional") != -1) or \
+             (weather.find("Showers") != -1):
+            precip_chance = "80-100%"
+        else:
+            precip_chance = "0-10%"
+        precip_chance += " precipitation"
+
+        # Unit conversions
+        temp, tunit = convert_temperature(temperature, tunit, units)
+        windstring = "Wind " + convert_windspeed(wind, units)
+        if windstring is None:
+            windstring = "Wind calm"
+
+        # Output string formatting
+        if start is not None:
+            startobj = localtime_from_string(start)
+            startstring = startobj.strftime("%b %-d, %-I:%M %p")
+        else:
+            startstring = "Unknown time"
+        if temperature is not None:
+            tempstring = u'{:.1f} {}'.format(temp, tunit)
+        else:
+            tempstring = u'? {}'.format(tunit)
+
+        forecast.append({'time': startstring, 'weather': weather,
+                         'precip': precip_chance, 'temperature': tempstring,
+                         'wind': windstring})
+
+    return forecast
+
+def get_daily_forecast(lat, lon, units='metric', ndays=7):
+    '''Returns daily forecast for a point for next ndays days'''
+
+    if ndays > 7:
+        sys.stderr.write("Cannot get longer than 7-day forecast")
+        sys.exit(1)
+
+    response = requests.get("{}/points/{},{}/forecast"\
+                            .format(provider,lat,lon))
+    daily = response.json()
+    periods = daily[u'properties'][u'periods'][0:ndays*2]
+    forecast = []
+    for period in periods:
+        name = period[u'name']
+        weather = period[u'shortForecast']
+        tunit = period[u'temperatureUnit']
+        low, high, precip_chance = parse_detailed_forecast(
+                                                    period[u'detailedForecast'])
+        wind = period[u'windSpeed']
+
+        # Unit conversions
+        lowtemp, tunit = convert_temperature(low, tunit, units)
+        hightemp, _ = convert_temperature(high, tunit, units)
+        windstring = "Wind " + convert_windspeed(wind, units)
+        if windstring is None:
+            windstring = "Winds calm"
+
+        # Output string formatting
+        precip_chance += " precipitation"
+        if lowtemp is not None:
+            lowstring = u'Low {:.1f} {}'.format(lowtemp, tunit)
+        else:
+            lowstring = None
+        if hightemp is not None:
+            highstring = u'High {:.1f} {}'.format(hightemp, tunit)
+        else:
+            highstring = None
+
+        forecast.append({'name': name, 'weather': weather,
+                         'precip': precip_chance, 'lowtemp': lowstring,
+                         'hightemp': highstring, 'wind': windstring})
+
+    return forecast
+
+################################################################################
+# Functions to write output to stdout, tint2 executor, or Openbox pipe menu
+#
+def current_conditions(locname, current_conditions):
+    '''Prints summary of current conditions'''
+
+    print("Current weather for " + locname['city'] + ", " + locname['state'])
+    print(current_conditions['weather'])
+    print(current_conditions['temperature'])
+    print(current_conditions['feelslike'])
+    print(current_conditions['wind'])
+    if current_conditions['gusts'] is not None:
+        print(current_conditions['gusts'])
+    print(current_conditions['humidity'])
+    print(current_conditions['updated'])
+
+def hourly_forecast(locname, hourly):
+    '''Prints hourly forecast'''
+
+    print("Hourly forecast for " + locname['city'] + ", " + locname['state'])
+    for hour in hourly:
+        print("--- " + hour['time'] + " ---")
+        print(hour['weather'])
+        print(hour['precip'])
+        print(hour['temperature'])
+        print(hour['wind'])
+
+def daily_forecast(locname, daily):
+    '''Prints daily forecast'''
+
+    print("Daily forecast for " + locname['city'] + ", " + locname['state'])
+    for day in daily:
+        print("--- " + day['name'] + " ---")
+        print(day['weather'])
+        if day['precip'] is not None:
+            print(day['precip'])
+        if day['lowtemp'] is not None:
+            print(day['lowtemp'])
+        if day['hightemp'] is not None:
+            print(day['hightemp'])
+        print day['wind']
+
+def openbox_current(locname, current_conditions, icon_path):
+    '''Prints main Openbox pipe menu displaying current conditions'''
+
+    menu_icon = icon_path + "/weather-few-clouds.svg"
+    current_icon = weather_to_icon(current_conditions['weather'], openboxbg,
+                                   icon_path)
+
+    print("<openbox_pipe_menu>")
+    print("  <separator label=\"{}, {}\"/>"\
+          .format(locname['city'], locname['state']))
+    print("  <item label=\"{}\" icon=\"{}\"/>"\
+          .format(current_conditions['weather'], current_icon))
+    print("  <item label=\"{}, {}\"/>"\
+          .format(current_conditions['temperature'],
+                  current_conditions['feelslike']))
+    if current_conditions['gusts'] is not None:
+        print("  <item label=\"{}, {}\"/>"\
+              .format(current_conditions['wind'], current_conditions['gusts']))
+    else:
+        print("  <item label=\"{}\"/>".format(current_conditions['wind']))
+    print("  <item label=\"{}\"/>".format(current_conditions['humidity']))
+    print("  <item label=\"{}\"/>".format(current_conditions['updated']))
+
+    # Hourly forecast
+    print("  <menu id=\"hourly-forecast\" label=\"Next 24 hours\" " +
+          "execute=\"openbox-weather -o openbox-hourly\">")
+    print("  </menu>")
+
+    # Daily forecast
+    print("  <menu id=\"daily-forecast\" label=\"Next 7 days\" " +
+          "execute=\"openbox-weather -o openbox-daily\">")
+    print("  </menu>")
+    print("</openbox_pipe_menu>")
+
+def openbox_hourly(hourly, icon_path):
+
+    print("<openbox_pipe_menu>")
+    for hour in hourly:
+        icon = weather_to_icon(hour['weather'], openboxbg, icon_path)
+        print("  <separator label=\"{}\"/>".format(hour['time']))
+        print("  <item label=\"{}\" icon=\"{}\"/>"\
+              .format(hour['weather'], icon))
+        print("  <item label=\"{}\"/>".format(hour['precip']))
+        print("  <item label=\"{}\"/>".format(hour['temperature']))
+        print("  <item label=\"{}\"/>".format(hour['wind']))
+    print("</openbox_pipe_menu>")
+
+def openbox_daily(daily, icon_path):
+
+    print("<openbox_pipe_menu>")
+    for day in daily:
+        icon = weather_to_icon(day['weather'], openboxbg, icon_path)
+        print("  <separator label=\"{}\"/>".format(day['name']))
+        print("  <item label=\"{}\" icon=\"{}\"/>"\
+              .format(day['weather'], icon))
+        if day['precip'] is not None:
+            print("  <item label=\"{}\"/>".format(day['precip']))
+        if day['lowtemp'] is not None:
+            print("  <item label=\"{}\"/>".format(day['lowtemp']))
+        if day['hightemp'] is not None:
+            print("  <item label=\"{}\"/>".format(day['hightemp']))
+        print("  <item label=\"{}\"/>".format(day['wind']))
+    print("</openbox_pipe_menu>")
+
+def tint2(locname, current_conditions, icon_path):
+    '''Prints icon and temperature for display in tint2 executor'''
+
+    icon = weather_to_icon(current_conditions['weather'], tint2bg, icon_path)
+
+    print(icon)
+    print(current_conditions['temperature'])
+
+    # Write additional information to stderr, which tint2 will display as a
+    # tooltip if execp_tooltip is missing
+
+    sys.stderr.write(locname['city'] + ", " + locname['state'] + "\n")
+    sys.stderr.write(current_conditions['weather'] + "\n")
+    sys.stderr.write(current_conditions['temperature'] + ", " +
+                     current_conditions['feelslike'] + "\n")
+    if current_conditions['gusts'] is not None:
+        sys.stderr.write(current_conditions['wind'] + ", " +
+                         current_conditions['gusts'] + "\n")
+    else:
+        sys.stderr.write(current_conditions['wind'] + "\n")
+    sys.stderr.write(current_conditions['humidity'] + "\n")
+    sys.stderr.write(current_conditions['updated'] + "\n")
+
+################################################################################
+# Main program
+#
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description='NOAA weather data for \
+                                     Openbox pipe menu and tint2 panel')
+    parser.add_argument('-v', '--version', help='openbox-weather version')
+    parser.add_argument('-o', '--output', help='output format: current, \
+                        hourly, daily, nearest-station, openbox-current, \
+                        openbox-hourly, openbox-daily, tint2')
+    args = parser.parse_args()
+
+    lat, lon, station, units, icon_path, openboxbg, tint2bg = read_config()
+    if station is None:
+        station = get_nearest_station(lat, lon)
+    if args.output is None:
+        output = 'current'
+    else:
+        output = args.output
+
+    if args.version is not None:
+        print_version()
+        sys.exit(0)
+
+    if output == 'current':
+        locname = get_location_name(lat, lon)
+        current = get_current_conditions(station, units=units)
+        current_conditions(locname, current)
+    elif output == 'hourly':
+        locname = get_location_name(lat, lon)
+        hourly = get_hourly_forecast(lat, lon, units=units)
+        hourly_forecast(locname, hourly)
+    elif output == 'daily':
+        locname = get_location_name(lat, lon)
+        daily = get_daily_forecast(lat, lon, units=units)
+        daily_forecast(locname, daily)
+    elif output == 'nearest-station':
+        station = get_nearest_station(lat, lon)
+        print("Station nearest {},{}: {}".format(lat, lon, station))
+    elif output == 'openbox-current':
+        locname = get_location_name(lat, lon)
+        current = get_current_conditions(station, units=units)
+        openbox_current(locname, current, icon_path)
+    elif output == 'openbox-hourly':
+        hourly = get_hourly_forecast(lat, lon, units=units)
+        openbox_hourly(hourly, icon_path)
+    elif output == 'openbox-daily':
+        daily = get_daily_forecast(lat, lon, units=units)
+        openbox_daily(daily, icon_path)
+    elif output == 'tint2':
+        locname = get_location_name(lat, lon)
+        current = get_current_conditions(station, units=units)
+        tint2(locname, current, icon_path)
+    else:
+        sys.stderr.write("Unknown output format {}.\n".format(output))
+        sys.exit(1)

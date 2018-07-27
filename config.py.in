@@ -1,0 +1,7 @@
+latitude = 38.919695
+longitude = -77.024199
+station = "KDCA"
+units = "imperial"
+icon_path = "${CMAKE_INSTALL_PREFIX}/share/openbox-weather/icons"
+openboxbg = "dark"
+tint2bg = "dark"
