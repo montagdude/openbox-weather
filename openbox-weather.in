@@ -548,7 +548,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='NOAA weather data for \
                                      Openbox pipe menu and tint2 panel')
-    parser.add_argument('-v', '--version', help='openbox-weather version')
+    parser.add_argument('-v', '--version', help='openbox-weather version',
+                        action='store_true')
     parser.add_argument('-o', '--output', help='output format: current, \
                         hourly, daily, nearest-station, openbox-current, \
                         openbox-hourly, openbox-daily, tint2')
@@ -562,7 +563,7 @@ if __name__ == "__main__":
     else:
         output = args.output
 
-    if args.version is not None:
+    if args.version:
         print_version()
         sys.exit(0)
 
