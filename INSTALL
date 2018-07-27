@@ -1,0 +1,11 @@
+openbox-weather uses cmake to configure and install. For example (from the
+source directory):
+
+mkdir build
+cd build
+	cmake ..
+	make install
+cd ..
+
+This will install it in /usr/local. To change the install directory pass
+-DCMAKE_INSTALL_PREFIX=/install/root to cmake.
