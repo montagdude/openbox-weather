@@ -23,7 +23,7 @@ openbox-weather -o openbox-current
 
 You will need to put something like this in your Openbox menu.xml to use it:
 ```
-<menu id="weather-menu" label="Weather" execute="/usr/local/bin/openbox-weather -o openbox-current">
+<menu id="weather-menu" label="Weather" execute="openbox-weather -o openbox-current">
 </menu>
 ```
 
@@ -35,6 +35,9 @@ openbox-weather -o openbox-current
 And in your tint2 config script, for the executor use
 ```
 execp_command = openbox-weather -o tint2
+execp_continuous = 0
+execp_has_icon = 1
+execp_cache_icon = 0
 ```
 
 To see other possible output options, use openbox-weather -h. Please note that
