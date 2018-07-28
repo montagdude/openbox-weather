@@ -1,0 +1,19 @@
+# HOW TO EDIT THIS FILE:
+# The "handy ruler" below makes it easier to edit a package description.
+# Line up the first '|' above the ':' following the base package name, and
+# the '|' on the right side marks the last column you can put a character in.
+# You must make exactly 11 lines for the formatting to be correct.  It's also
+# customary to leave one space after the ':' except on otherwise blank lines.
+
+               |-----handy-ruler------------------------------------------------------|
+openbox-weather: openbox-weather (weather parser for openbox, tint2, or text output)
+openbox-weather:
+openbox-weather: openbox-weather retrieves weather and forecast data for a location
+openbox-weather: from the US National Weather service and formats it for displaying in
+openbox-weather: an Openbox pipe menu, a tint2 executor, or plain text.
+openbox-weather:
+openbox-weather: homepage: https://github.com/montagdude/openbox-weather
+openbox-weather:
+openbox-weather:
+openbox-weather:
+openbox-weather:
