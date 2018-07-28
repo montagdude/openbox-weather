@@ -450,7 +450,7 @@ def daily_forecast(locname, daily):
             print(day['lowtemp'])
         if day['hightemp'] is not None:
             print(day['hightemp'])
-        print day['wind']
+        print(day['wind'])
 
 def openbox_current(locname, current_conditions, icon_path):
     '''Prints main Openbox pipe menu displaying current conditions'''
