@@ -152,7 +152,7 @@ def weather_to_icon(weather, bgcolor, icon_path):
     elif (weather.find("rain") != -1) or (weather.find("shower") != -1):
         if weather.find("slight") != -1:
             icon = icon_path + bgpath + "/weather-clouds.svg"
-        elif weather.find("chance") != -1:
+        elif (weather.find("chance") != -1) or (weather.find("isolated") != -1):
             icon = icon_path + bgpath + "/weather-showers-scattered.svg"
         else:
             icon = icon_path + bgpath + "/weather-showers.svg"
@@ -331,7 +331,8 @@ def get_hourly_forecast(lat, lon, units='metric', nhours=24):
 
         # Chance of precipitation (comes from weather string, with %
         # "translated" the same way it is by forecast.weather.gov)
-        if weather.find("Slight Chance") != -1:
+        if (weather.find("Slight Chance") != -1) or \
+           (weather.find("Isolated") != -1):
             precip_chance = "10-20%"
         elif weather.find("Chance") != -1:
             precip_chance = "30-50%"
