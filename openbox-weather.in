@@ -334,7 +334,8 @@ def get_hourly_forecast(lat, lon, units='metric', nhours=24):
         if (weather.find("Slight Chance") != -1) or \
            (weather.find("Isolated") != -1):
             precip_chance = "10-20%"
-        elif weather.find("Chance") != -1:
+        elif (weather.find("Chance") != -1) or \
+             (weather.find("Scattered") != -1):
             precip_chance = "30-50%"
         elif weather.find("Likely") != -1:
             precip_chance = "60-70%"
