@@ -244,9 +244,9 @@ def get_location_name(lat, lon):
 def get_current_conditions(stationid, units='metric'):
     '''Returns current weather, temperature, feels like temp, and wind'''
 
-    response = requests.get("{}/stations/{}/observations/current"\
+    response = requests.get("{}/stations/{}/observations"\
                             .format(provider, stationid))
-    conditions = response.json()
+    conditions = response.json()[u'features'][0]
     weather = conditions[u'properties'][u'textDescription']
     temperature = conditions[u'properties'][u'temperature'][u'value']
     tunit = conditions[u'properties'][u'temperature'][u'unitCode']\
